@@ -28,6 +28,9 @@
     "onCommand:codeBuddyPet.openAssetFolder"
   ],
   "main": "./out/extension.js",
+  "extensionKind": [
+    "ui"
+  ],
   "contributes": {
     "viewsContainers": {
       "activitybar": [

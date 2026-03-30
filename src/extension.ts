@@ -1487,6 +1487,7 @@ function escapeHtml(value: string): string {
 }
 
 export function activate(context: vscode.ExtensionContext): void {
+  context.globalState.setKeysForSync([STATE_KEY, NAME_CONFIRMED_KEY]);
   const provider = new PetPanelProvider(context);
 
   context.subscriptions.push(

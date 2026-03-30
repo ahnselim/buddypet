@@ -1,0 +1,111 @@
+{
+  "name": "code-buddy-pet",
+  "displayName": "Code Buddy Pet",
+  "icon": "media/marketplace-icon.png",
+  "description": "Raise a small coding pet inside a VS Code sidebar.",
+  "version": "0.0.1",
+  "publisher": "personal",
+  "license": "UNLICENSED",
+  "private": true,
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/ahnselim/buddypet.git"
+  },
+  "engines": {
+    "vscode": "^1.113.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "onView:codeBuddyPet.view",
+    "onCommand:codeBuddyPet.openPetView",
+    "onCommand:codeBuddyPet.feedPet",
+    "onCommand:codeBuddyPet.playWithPet",
+    "onCommand:codeBuddyPet.letPetNap",
+    "onCommand:codeBuddyPet.petPet",
+    "onCommand:codeBuddyPet.resetPet",
+    "onCommand:codeBuddyPet.openAssetFolder"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "codeBuddyPet",
+          "title": "Pet",
+          "icon": "media/icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "codeBuddyPet": [
+        {
+          "id": "codeBuddyPet.view",
+          "name": "Desk Pet",
+          "type": "webview"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "codeBuddyPet.openPetView",
+        "title": "Code Buddy Pet: Focus Pet View"
+      },
+      {
+        "command": "codeBuddyPet.feedPet",
+        "title": "Code Buddy Pet: Feed Pet"
+      },
+      {
+        "command": "codeBuddyPet.playWithPet",
+        "title": "Code Buddy Pet: Play With Pet"
+      },
+      {
+        "command": "codeBuddyPet.letPetNap",
+        "title": "Code Buddy Pet: Let Pet Nap"
+      },
+      {
+        "command": "codeBuddyPet.petPet",
+        "title": "Code Buddy Pet: Pet Pet"
+      },
+      {
+        "command": "codeBuddyPet.resetPet",
+        "title": "Code Buddy Pet: Reset Pet"
+      },
+      {
+        "command": "codeBuddyPet.openAssetFolder",
+        "title": "Code Buddy Pet: Open Asset Folder"
+      }
+    ],
+    "configuration": {
+      "title": "Code Buddy Pet",
+      "properties": {
+        "codeBuddyPet.tickMinutes": {
+          "type": "number",
+          "default": 15,
+          "minimum": 1,
+          "description": "How often the pet stats slowly drift."
+        },
+        "codeBuddyPet.petName": {
+          "type": "string",
+          "default": "",
+          "description": "Optional pet name. Leave blank to choose one the first time you open the pet."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "package": "vsce package"
+  },
+  "overrides": {
+    "cheerio": "1.0.0-rc.12"
+  },
+  "devDependencies": {
+    "@types/node": "^20.17.57",
+    "@types/vscode": "^1.110.0",
+    "typescript": "^5.9.3",
+    "vsce": "^2.15.0"
+  }
+}

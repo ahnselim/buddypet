@@ -4,27 +4,40 @@ import * as vscode from "vscode";
 
 type PetMood = "idle" | "happy" | "sleepy" | "hungry" | "excited";
 type PetTheme = "rainbow" | "yellow" | "pink" | "skyblue" | "mint" | "yellowgreen";
+type PetColorMode = "bright" | "dark";
 
 interface PetState {
   name: string;
   theme: PetTheme;
+  colorMode: PetColorMode;
   level: number;
   xp: number;
   hunger: number;
   energy: number;
   happiness: number;
+  saveActivity: Record<string, number>;
   lastUpdatedAt: number;
+}
+
+interface ContributionDay {
+  dateKey: string;
+  count: number;
+  level: number;
+  isToday: boolean;
 }
 
 interface PetSnapshot extends PetState {
   mood: PetMood;
   imageUri: string;
+  contributions: ContributionDay[];
+  todaySaves: number;
 }
 
 interface WebviewMessage {
   command?: string;
   name?: string;
   theme?: string;
+  mode?: string;
 }
 
 const STATE_KEY = "codeBuddyPet.state";
@@ -32,11 +45,13 @@ const NAME_CONFIRMED_KEY = "codeBuddyPet.nameConfirmed";
 const DEFAULT_STATE: PetState = {
   name: "",
   theme: "rainbow",
+  colorMode: "bright",
   level: 1,
   xp: 0,
   hunger: 35,
   energy: 78,
   happiness: 72,
+  saveActivity: {},
   lastUpdatedAt: Date.now()
 };
 
@@ -89,6 +104,10 @@ const THEME_OPTIONS = [
 
 function isPetTheme(value: string | undefined): value is PetTheme {
   return THEME_OPTIONS.some((option) => option.id === value);
+}
+
+function isPetColorMode(value: string | undefined): value is PetColorMode {
+  return value === "bright" || value === "dark";
 }
 
 function clamp(value: number, min = 0, max = 100): number {
@@ -162,7 +181,7 @@ class PetPanelProvider implements vscode.WebviewViewProvider, vscode.Disposable 
 
   public reset(): void {
     const currentName = this.state.name.trim() || this.getConfiguredName();
-    this.state = this.createDefaultState(currentName, this.state.theme);
+    this.state = this.createDefaultState(currentName, this.state.theme, this.state.colorMode);
     this.persistAndRender("Pet progress reset.");
   }
 
@@ -174,6 +193,7 @@ class PetPanelProvider implements vscode.WebviewViewProvider, vscode.Disposable 
     this.state.xp += 4;
     this.state.hunger = clamp(this.state.hunger + 2);
     this.state.happiness = clamp(this.state.happiness + 1);
+    this.recordContribution();
     this.handleLevelUps();
     this.persistAndRender();
   }
@@ -211,6 +231,9 @@ class PetPanelProvider implements vscode.WebviewViewProvider, vscode.Disposable 
         case "setTheme":
           this.setTheme(message.theme);
           break;
+        case "setMode":
+          this.setColorMode(message.mode);
+          break;
         case "rename":
           void this.renamePet();
           break;
@@ -238,12 +261,13 @@ class PetPanelProvider implements vscode.WebviewViewProvider, vscode.Disposable 
     }
   }
 
-  private createDefaultState(name?: string, theme?: string): PetState {
+  private createDefaultState(name?: string, theme?: string, colorMode?: string): PetState {
     const configuredName = name?.trim() ?? this.getConfiguredName();
     return {
       ...DEFAULT_STATE,
       name: configuredName || DEFAULT_STATE.name,
       theme: this.normalizeTheme(theme),
+      colorMode: this.normalizeColorMode(colorMode),
       lastUpdatedAt: Date.now()
     };
   }
@@ -267,6 +291,10 @@ class PetPanelProvider implements vscode.WebviewViewProvider, vscode.Disposable 
 
   private normalizeTheme(theme?: string): PetTheme {
     return isPetTheme(theme) ? theme : DEFAULT_STATE.theme;
+  }
+
+  private normalizeColorMode(mode?: string): PetColorMode {
+    return isPetColorMode(mode) ? mode : DEFAULT_STATE.colorMode;
   }
 
   private hasPetName(): boolean {
@@ -311,6 +339,17 @@ class PetPanelProvider implements vscode.WebviewViewProvider, vscode.Disposable 
     }
 
     this.state.theme = nextTheme;
+    this.saveState();
+    this.render();
+  }
+
+  private setColorMode(mode?: string): void {
+    const nextMode = this.normalizeColorMode(mode);
+    if (nextMode === this.state.colorMode) {
+      return;
+    }
+
+    this.state.colorMode = nextMode;
     this.saveState();
     this.render();
   }
@@ -381,11 +420,69 @@ class PetPanelProvider implements vscode.WebviewViewProvider, vscode.Disposable 
   private buildSnapshot(webview: vscode.Webview): PetSnapshot {
     const mood = this.determineMood();
     const imageUri = this.resolveImageUri(webview, mood);
+    const contributions = this.buildContributionDays();
+    const todayKey = this.getDateKey(new Date());
     return {
       ...this.state,
       mood,
-      imageUri
+      imageUri,
+      contributions,
+      todaySaves: this.state.saveActivity[todayKey] ?? 0
     };
+  }
+
+  private recordContribution(): void {
+    const todayKey = this.getDateKey(new Date());
+    const currentCount = this.state.saveActivity[todayKey] ?? 0;
+    this.state.saveActivity = {
+      ...this.state.saveActivity,
+      [todayKey]: currentCount + 1
+    };
+  }
+
+  private getDateKey(date: Date): string {
+    const year = date.getFullYear();
+    const month = `${date.getMonth() + 1}`.padStart(2, "0");
+    const day = `${date.getDate()}`.padStart(2, "0");
+    return `${year}-${month}-${day}`;
+  }
+
+  private getContributionLevel(count: number): number {
+    if (count >= 8) {
+      return 4;
+    }
+    if (count >= 5) {
+      return 3;
+    }
+    if (count >= 3) {
+      return 2;
+    }
+    if (count >= 1) {
+      return 1;
+    }
+    return 0;
+  }
+
+  private buildContributionDays(totalDays = 84): ContributionDay[] {
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+
+    const start = new Date(today);
+    start.setDate(start.getDate() - (totalDays - 1));
+
+    return Array.from({ length: totalDays }, (_, index) => {
+      const date = new Date(start);
+      date.setDate(start.getDate() + index);
+      const dateKey = this.getDateKey(date);
+      const count = this.state.saveActivity[dateKey] ?? 0;
+
+      return {
+        dateKey,
+        count,
+        level: this.getContributionLevel(count),
+        isToday: dateKey === this.getDateKey(today)
+      };
+    });
   }
 
   private determineMood(): PetMood {
@@ -493,6 +590,15 @@ class PetPanelProvider implements vscode.WebviewViewProvider, vscode.Disposable 
 
   private getThemeDropdownScript(): string {
     return `
+      for (const button of document.querySelectorAll("[data-mode-option]")) {
+        button.addEventListener("click", () => {
+          vscode.postMessage({
+            command: "setMode",
+            mode: button.getAttribute("data-mode-option")
+          });
+        });
+      }
+
       for (const dropdown of document.querySelectorAll("[data-theme-dropdown]")) {
         const triggers = dropdown.querySelectorAll("[data-theme-trigger]");
         const menu = dropdown.querySelector("[data-theme-menu]");
@@ -532,27 +638,73 @@ class PetPanelProvider implements vscode.WebviewViewProvider, vscode.Disposable 
     `;
   }
 
+  private getModeToggleMarkup(activeMode: PetColorMode): string {
+    const brightClass = activeMode === "bright" ? "active" : "";
+    const darkClass = activeMode === "dark" ? "active" : "";
+
+    return `
+      <div class="mode-toggle" aria-label="Text color mode">
+        <button class="mode-option ${brightClass}" type="button" data-mode-option="bright">Bright</button>
+        <button class="mode-option ${darkClass}" type="button" data-mode-option="dark">Dark</button>
+      </div>
+    `;
+  }
+
+  private getColorModeTokens(mode: PetColorMode) {
+    if (mode === "dark") {
+      return {
+        text: "rgba(255, 255, 255, 0.96)",
+        muted: "rgba(255, 255, 255, 0.76)"
+      };
+    }
+
+    return {
+      text: "#181818",
+      muted: "rgba(24, 24, 24, 0.72)"
+    };
+  }
+
+  private getComicMonoFontUri(): string {
+    if (!this.view) {
+      return "";
+    }
+
+    return this.view.webview
+      .asWebviewUri(vscode.Uri.joinPath(this.context.extensionUri, "media", "fonts", "ComicMono.ttf"))
+      .toString();
+  }
+
   private getSetupHtml(): string {
     const nonce = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
     const theme = this.getThemeOption(this.state.theme);
+    const colorMode = this.getColorModeTokens(this.state.colorMode);
+    const modeToggleMarkup = this.getModeToggleMarkup(this.state.colorMode);
     const themeToggleMarkup = this.getThemeToggleMarkup(this.state.theme);
     const themeDropdownScript = this.getThemeDropdownScript();
+    const cspSource = this.view?.webview.cspSource ?? "";
+    const comicMonoFontUri = this.getComicMonoFontUri();
 
     return `<!DOCTYPE html>
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'nonce-${nonce}';" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; font-src ${cspSource}; script-src 'nonce-${nonce}';" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Code Buddy Pet Setup</title>
     <style>
+      @font-face {
+        font-family: "Comic Mono";
+        src: url("${comicMonoFontUri}") format("truetype");
+        font-display: swap;
+      }
+
       :root {
         color-scheme: light dark;
         --bg-gradient: ${theme.background};
         --panel: ${theme.panel};
         --panel-border: rgba(255, 255, 255, 0.24);
-        --text: var(--vscode-foreground);
-        --muted: var(--vscode-descriptionForeground);
+        --text: ${colorMode.text};
+        --muted: ${colorMode.muted};
         --field-bg: rgba(255, 255, 255, 0.22);
         --field-border: rgba(255, 255, 255, 0.3);
         --button-bg: rgba(255, 255, 255, 0.24);
@@ -567,7 +719,7 @@ class PetPanelProvider implements vscode.WebviewViewProvider, vscode.Disposable 
         margin: 0;
         min-height: 100vh;
         color: var(--text);
-        font-family: var(--vscode-font-family);
+        font-family: "Comic Mono", var(--vscode-font-family), monospace;
         background:
           radial-gradient(circle at top, rgba(255, 255, 255, 0.35), transparent 42%),
           var(--bg-gradient);
@@ -595,6 +747,9 @@ class PetPanelProvider implements vscode.WebviewViewProvider, vscode.Disposable 
       .card-topbar {
         display: flex;
         justify-content: flex-end;
+        align-items: center;
+        gap: 8px;
+        flex-wrap: wrap;
       }
 
       .eyebrow {
@@ -652,6 +807,27 @@ class PetPanelProvider implements vscode.WebviewViewProvider, vscode.Disposable 
 
       button:hover {
         background: rgba(255, 255, 255, 0.3);
+      }
+
+      .mode-toggle {
+        display: inline-flex;
+        gap: 4px;
+        padding: 3px;
+        border-radius: 999px;
+        border: 1px solid rgba(255, 255, 255, 0.3);
+        background: rgba(255, 255, 255, 0.16);
+      }
+
+      .mode-option {
+        border: 0;
+        background: transparent;
+        border-radius: 999px;
+        min-height: 32px;
+        padding: 7px 12px;
+      }
+
+      .mode-option.active {
+        background: rgba(255, 255, 255, 0.34);
       }
 
       .theme-dropdown {
@@ -738,6 +914,7 @@ class PetPanelProvider implements vscode.WebviewViewProvider, vscode.Disposable 
     <div class="shell">
       <div class="card">
         <div class="card-topbar">
+          ${modeToggleMarkup}
           ${themeToggleMarkup}
         </div>
 
@@ -777,8 +954,12 @@ class PetPanelProvider implements vscode.WebviewViewProvider, vscode.Disposable 
   private getPetHtml(snapshot: PetSnapshot): string {
     const nonce = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
     const theme = this.getThemeOption(snapshot.theme);
+    const colorMode = this.getColorModeTokens(snapshot.colorMode);
+    const modeToggleMarkup = this.getModeToggleMarkup(snapshot.colorMode);
     const themeToggleMarkup = this.getThemeToggleMarkup(snapshot.theme);
     const themeDropdownScript = this.getThemeDropdownScript();
+    const cspSource = this.view?.webview.cspSource ?? "";
+    const comicMonoFontUri = this.getComicMonoFontUri();
     const stats = [
       { label: "Happiness", value: snapshot.happiness, tone: "warm" },
       { label: "Energy", value: snapshot.energy, tone: "cool" },
@@ -803,22 +984,35 @@ class PetPanelProvider implements vscode.WebviewViewProvider, vscode.Disposable 
 
     const moodLabel = snapshot.mood.charAt(0).toUpperCase() + snapshot.mood.slice(1);
     const nextLevelXp = this.requiredXpForNextLevel();
+    const contributionMarkup = snapshot.contributions
+      .map((day) => {
+        const todayClass = day.isToday ? " today" : "";
+        const title = `${day.dateKey}: ${day.count} save${day.count === 1 ? "" : "s"}`;
+        return `<div class="grass-cell level-${day.level}${todayClass}" title="${title}" aria-label="${title}"></div>`;
+      })
+      .join("");
 
     return `<!DOCTYPE html>
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src ${this.view?.webview.cspSource} data:; style-src 'unsafe-inline'; script-src 'nonce-${nonce}';" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src ${cspSource} data:; style-src 'unsafe-inline'; font-src ${cspSource}; script-src 'nonce-${nonce}';" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Code Buddy Pet</title>
     <style>
+      @font-face {
+        font-family: "Comic Mono";
+        src: url("${comicMonoFontUri}") format("truetype");
+        font-display: swap;
+      }
+
       :root {
         color-scheme: light dark;
         --bg-gradient: ${theme.background};
         --panel: ${theme.panel};
         --panel-border: rgba(255, 255, 255, 0.24);
-        --text: var(--vscode-foreground);
-        --muted: var(--vscode-descriptionForeground);
+        --text: ${colorMode.text};
+        --muted: ${colorMode.muted};
         --button-bg: rgba(255, 255, 255, 0.18);
         --button-border: rgba(255, 255, 255, 0.22);
         --shadow: rgba(0, 0, 0, 0.18);
@@ -831,7 +1025,7 @@ class PetPanelProvider implements vscode.WebviewViewProvider, vscode.Disposable 
       body {
         margin: 0;
         color: var(--text);
-        font-family: var(--vscode-font-family);
+        font-family: "Comic Mono", var(--vscode-font-family), monospace;
         background:
           radial-gradient(circle at top, rgba(255, 255, 255, 0.35), transparent 42%),
           var(--bg-gradient);
@@ -839,13 +1033,13 @@ class PetPanelProvider implements vscode.WebviewViewProvider, vscode.Disposable 
 
       .shell {
         min-height: 100vh;
-        padding: 16px;
+        padding: 12px;
       }
 
       .card {
         display: grid;
-        gap: 14px;
-        padding: 16px;
+        gap: 12px;
+        padding: 14px;
         border-radius: 20px;
         background: var(--panel);
         border: 1px solid var(--panel-border);
@@ -856,6 +1050,9 @@ class PetPanelProvider implements vscode.WebviewViewProvider, vscode.Disposable 
       .card-topbar {
         display: flex;
         justify-content: flex-end;
+        align-items: center;
+        gap: 8px;
+        flex-wrap: wrap;
       }
 
       .header {
@@ -894,8 +1091,8 @@ class PetPanelProvider implements vscode.WebviewViewProvider, vscode.Disposable 
         position: relative;
         display: grid;
         place-items: center;
-        min-height: 220px;
-        padding: 18px;
+        min-height: 172px;
+        padding: 14px;
         border-radius: 18px;
         background:
           radial-gradient(circle at top, rgba(255, 255, 255, 0.45), transparent 45%),
@@ -906,21 +1103,82 @@ class PetPanelProvider implements vscode.WebviewViewProvider, vscode.Disposable 
       .pet-stage::after {
         content: "";
         position: absolute;
-        width: 130px;
-        height: 24px;
-        bottom: 18px;
+        width: 110px;
+        height: 18px;
+        bottom: 14px;
         border-radius: 50%;
         background: rgba(0, 0, 0, 0.12);
-        filter: blur(10px);
+        filter: blur(8px);
       }
 
       .pet-image {
-        max-width: min(100%, 220px);
-        max-height: 180px;
+        max-width: min(100%, 180px);
+        max-height: 140px;
         object-fit: contain;
         position: relative;
         z-index: 1;
         animation: floaty 2.7s ease-in-out infinite;
+      }
+
+      .garden {
+        display: grid;
+        gap: 8px;
+        padding: 12px 14px;
+        border-radius: 14px;
+        background: rgba(0, 0, 0, 0.08);
+      }
+
+      .garden-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        font-size: 11px;
+        color: var(--muted);
+        text-transform: uppercase;
+      }
+
+      .garden-count {
+        color: var(--text);
+        font-size: 12px;
+      }
+
+      .garden-grid {
+        display: grid;
+        grid-auto-flow: column;
+        grid-template-rows: repeat(7, 10px);
+        grid-auto-columns: 10px;
+        gap: 4px;
+        justify-content: flex-start;
+      }
+
+      .grass-cell {
+        width: 10px;
+        height: 10px;
+        border-radius: 3px;
+        background: rgba(255, 255, 255, 0.18);
+        border: 1px solid rgba(255, 255, 255, 0.12);
+      }
+
+      .grass-cell.level-1 {
+        background: #b8f279;
+      }
+
+      .grass-cell.level-2 {
+        background: #7fda63;
+      }
+
+      .grass-cell.level-3 {
+        background: #34b45a;
+      }
+
+      .grass-cell.level-4 {
+        background: #0c7a43;
+      }
+
+      .grass-cell.today {
+        outline: 1px solid rgba(255, 255, 255, 0.72);
+        outline-offset: 1px;
       }
 
       .summary {
@@ -1011,6 +1269,27 @@ class PetPanelProvider implements vscode.WebviewViewProvider, vscode.Disposable 
 
       button:hover {
         background: rgba(255, 255, 255, 0.25);
+      }
+
+      .mode-toggle {
+        display: inline-flex;
+        gap: 4px;
+        padding: 3px;
+        border-radius: 999px;
+        border: 1px solid rgba(255, 255, 255, 0.28);
+        background: rgba(255, 255, 255, 0.16);
+      }
+
+      .mode-option {
+        border: 0;
+        background: transparent;
+        border-radius: 999px;
+        min-height: 32px;
+        padding: 7px 12px;
+      }
+
+      .mode-option.active {
+        background: rgba(255, 255, 255, 0.34);
       }
 
       .theme-dropdown {
@@ -1110,6 +1389,7 @@ class PetPanelProvider implements vscode.WebviewViewProvider, vscode.Disposable 
     <div class="shell">
       <div class="card">
         <div class="card-topbar">
+          ${modeToggleMarkup}
           ${themeToggleMarkup}
         </div>
 
@@ -1123,6 +1403,14 @@ class PetPanelProvider implements vscode.WebviewViewProvider, vscode.Disposable 
 
         <div class="pet-stage">
           <img class="pet-image" src="${snapshot.imageUri}" alt="${escapeHtml(snapshot.name)}" />
+        </div>
+
+        <div class="garden">
+          <div class="garden-header">
+            <span>Save Garden</span>
+            <span class="garden-count">${snapshot.todaySaves} save${snapshot.todaySaves === 1 ? "" : "s"} today</span>
+          </div>
+          <div class="garden-grid">${contributionMarkup}</div>
         </div>
 
         <div class="summary">
